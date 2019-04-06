@@ -22,6 +22,7 @@ Copyright (c) 2016 - 2018 Eric Goller / projecthamster <elbenfreund@projecthamst
 
 
 const Lang = imports.lang;
+const GLib = imports.gi.GLib;
 const Shell = imports.gi.Shell;
 const Meta = imports.gi.Meta;
 const Main = imports.ui.main;
@@ -32,7 +33,6 @@ const _ = Gettext.gettext;
 
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
-const Convenience = Me.imports.convenience;
 const PanelWidget = Me.imports.widgets.panelWidget.PanelWidget;
 
 // dbus-send --session --type=method_call --print-reply --dest=org.gnome.Hamster /org/gnome/Hamster org.freedesktop.DBus.Introspectable.Introspect
@@ -93,95 +93,163 @@ let WindowsProxy = Gio.DBusProxy.makeProxyWrapper(WindowsProxyIface);
  *
  * @class
  */
-function Controller(extensionMeta) {
-    let dateMenu = Main.panel.statusArea.dateMenu;
+class Controller {
+    constructor(extensionMeta) {
+        let dateMenu = Main.panel.statusArea.dateMenu;
 
-    return {
-        extensionMeta: extensionMeta,
-        panelWidget: null,
-        settings: null,
-        placement: 0,
-        apiProxy: null,
-        windowsProxy: null,
+        this.extensionMeta = extensionMeta;
+        this.panelWidget = null;
+        this.settings = null;
+        this.placement = 0;
+        this.apiProxy = null;
+        this.windowsProxy = null;
         // ``shouldEnable`` indicates if the 'magic' enable function has been called or not.
         // for details please see: https://github.com/projecthamster/hamster-shell-extension/pull/239
-        shouldEnable: false,
+        this.shouldEnable = false;
+    }
 
-        /**
-         * 'Magic' method, called upon extension launch.
-         *
-         * The gnome-shell-extension API grantees that there is always a ``disable`` call in
-         * between to ``enable`` calls.
-         *
-         * Note:
-         *  We only set up our dbus proxies here. In order to be able to do so asynchronously all
-         *  the actual startup code is refered to ``deferred_enable``.
-         */
-        enable: function() {
-            this.shouldEnable = true;
-            new ApiProxy(Gio.DBus.session, 'org.gnome.Hamster', '/org/gnome/Hamster',
-                Lang.bind(this, function(proxy) {
-                    this.apiProxy = proxy;
-                    this.deferred_enable();
-                }));
-            new WindowsProxy(Gio.DBus.session, "org.gnome.Hamster.WindowServer",
-                "/org/gnome/Hamster/WindowServer",
-                Lang.bind(this, function(proxy) {
-                    this.windowsProxy = proxy;
-                    this.deferred_enable();
-                }));
-        },
+    /**
+     * 'Magic' method, called upon extension launch.
+     *
+     * The gnome-shell-extension API grantees that there is always a ``disable`` call in
+     * between to ``enable`` calls.
+     *
+     * Note:
+     *  We only set up our dbus proxies here. In order to be able to do so asynchronously all
+     *  the actual startup code is refered to ``deferred_enable``.
+     */
+    enable() {
+        this.shouldEnable = true;
+        new ApiProxy(Gio.DBus.session, 'org.gnome.Hamster', '/org/gnome/Hamster',
+            (proxy) => {
+                this.apiProxy = proxy;
+                this.deferred_enable();
+            });
+        new WindowsProxy(Gio.DBus.session, "org.gnome.Hamster.WindowServer",
+            "/org/gnome/Hamster/WindowServer",
+            (proxy) => {
+                this.windowsProxy = proxy;
+                this.deferred_enable();
+            });
+    }
 
-        deferred_enable: function() {
-            // Make sure ``enable`` is 'finished' and ``disable`` has not been
-            // called in between.
-            if (!this.shouldEnable || !this.apiProxy || !this.windowsProxy)
-                return;
+    deferred_enable() {
+        // Make sure ``enable`` is 'finished' and ``disable`` has not been
+        // called in between.
+        if (!this.shouldEnable || !this.apiProxy || !this.windowsProxy)
+            return;
 
-            this.settings = Convenience.getSettings();
-            this.panelWidget = new PanelWidget(this);
-            this.placement = this.settings.get_int("panel-placement");
+        this.settings = ExtensionUtils.getSettings();
+        this.panelWidget = new PanelWidget(this);
+        this.placement = this.settings.get_int("panel-placement");
 
-            this._placeWidget(this.placement, this.panelWidget);
+        this._placeWidget(this.placement, this.panelWidget);
 
-            // Callbacks that handle appearing/vanishing dbus services.
-            function apiProxy_appeared_callback() {
-            }
+        // Callbacks that handle appearing/vanishing dbus services.
+        function apiProxy_appeared_callback() {
+        }
 
-            function apiProxy_vanished_callback() {
-                global.log(_("hamster-shell-extension: 'hamster-service' not running. Shutting down."));
-                Main.notify(_("hamster-shell-extension: 'hamster-service' not running. Shutting down."));
-                this.disable();
-            }
+        function apiProxy_vanished_callback() {
+            global.log(_("hamster-shell-extension: 'hamster-service' not running. Shutting down."));
+            Main.notify(_("hamster-shell-extension: 'hamster-service' not running. Shutting down."));
+            this.disable();
+        }
 
-            function windowsProxy_appeared_callback() {
-            }
+        function windowsProxy_appeared_callback() {
+        }
 
-            function windowsProxy_vanished_callback() {
-                global.log(_("hamster-shell-extension: 'hamster-windows-service' not running. Shutting down."));
-                Main.notify(_("hamster-shell-extension: 'hamster-windows-service' not running. Shutting down."));
-                this.disable();
-            }
+        function windowsProxy_vanished_callback() {
+            global.log(_("hamster-shell-extension: 'hamster-windows-service' not running. Shutting down."));
+            Main.notify(_("hamster-shell-extension: 'hamster-windows-service' not running. Shutting down."));
+            this.disable();
+        }
 
-            // Set-up watchers that watch for required dbus services.
-            let dbus_watcher = Gio.bus_watch_name(Gio.BusType.SESSION, 'org.gnome.Hamster',
-                Gio.BusNameWatcherFlags.NONE, apiProxy_appeared_callback.bind(this),
-                apiProxy_vanished_callback.bind(this));
+        // Set-up watchers that watch for required dbus services.
+        let dbus_watcher = Gio.bus_watch_name(Gio.BusType.SESSION, 'org.gnome.Hamster',
+            Gio.BusNameWatcherFlags.NONE, apiProxy_appeared_callback.bind(this),
+            apiProxy_vanished_callback.bind(this));
 
-            let dbus_watcher_window = Gio.bus_watch_name(Gio.BusType.SESSION, 'org.gnome.Hamster.WindowServer',
-                Gio.BusNameWatcherFlags.NONE, windowsProxy_appeared_callback.bind(this),
-                windowsProxy_vanished_callback.bind(this));
+        let dbus_watcher_window = Gio.bus_watch_name(Gio.BusType.SESSION, 'org.gnome.Hamster.WindowServer',
+            Gio.BusNameWatcherFlags.NONE, windowsProxy_appeared_callback.bind(this),
+            windowsProxy_vanished_callback.bind(this));
 
-            this.apiProxy.connectSignal('ActivitiesChanged', Lang.bind(this, this.refreshActivities));
-            this.activities = this.refreshActivities();
+        this.apiProxy.connectSignal('ActivitiesChanged', this.refreshActivities.bind(this));
+        this.refreshActivities();
 
-            Main.panel.menuManager.addMenu(this.panelWidget.menu);
-            Main.wm.addKeybinding("show-hamster-dropdown",
-                this.panelWidget._settings,
-                Meta.KeyBindingFlags.NONE,
-                // Since Gnome 3.16, Shell.KeyBindingMode is replaced by Shell.ActionMode
-                Shell.KeyBindingMode ? Shell.KeyBindingMode.ALL : Shell.ActionMode.ALL,
-                Lang.bind(this.panelWidget, this.panelWidget.toggle)
+        Main.panel.menuManager.addMenu(this.panelWidget.menu);
+        Main.wm.addKeybinding("show-hamster-dropdown",
+            this.panelWidget._settings,
+            Meta.KeyBindingFlags.NONE,
+            // Since Gnome 3.16, Shell.KeyBindingMode is replaced by Shell.ActionMode
+            Shell.KeyBindingMode ? Shell.KeyBindingMode.ALL : Shell.ActionMode.ALL,
+            this.panelWidget.toggle.bind(this.panelWidget)
+        );
+    }
+
+    disable() {
+        this.shouldEnable = false;
+        Main.wm.removeKeybinding("show-hamster-dropdown");
+
+        global.log('Shutting down hamster-shell-extension.');
+        this._removeWidget(this.placement);
+        Main.panel.menuManager.removeMenu(this.panelWidget.menu);
+        this.panelWidget.destroy();
+        this.panelWidget = null;
+        this.apiProxy = null;
+        this.windowsProxy = null;
+    }
+
+    /**
+     * Build a new cache of all activities present in the backend.
+     */
+    refreshActivities() {
+        if (this.runningActivitiesQuery) {
+            return(this.activities);
+        }
+
+        this.runningActivitiesQuery = true;
+        this.apiProxy.GetActivitiesRemote("", ([response], err) => {
+            this.runningActivitiesQuery = false;
+            this.activities = response;
+            global.log('ACTIVITIES HAMSTER: ', this.activities);
+        });
+    }
+
+    /**
+     * Place the actual extension wi
+     * get in the right place according to settings.
+     */
+    _placeWidget(placement, panelWidget) {
+        if (placement == 1) {
+            // 'Replace calendar'
+            Main.panel.addToStatusArea("hamster", this.panelWidget, 0, "center");
+
+            Main.panel._centerBox.remove_actor(dateMenu.container);
+            Main.panel._addToPanelBox('dateMenu', dateMenu, -1, Main.panel._rightBox);
+        } else if (placement == 2) {
+            // 'Replace activities'
+            let activitiesMenu = Main.panel._leftBox.get_children()[0].get_children()[0].get_children()[0].get_children()[0];
+            // If our widget replaces the 'Activities' menu in the panel,
+            // this property stores the original text so we can restore it
+            // on ``this.disable``.
+            this._activitiesText = activitiesMenu.get_text();
+            activitiesMenu.set_text('');
+            Main.panel.addToStatusArea("hamster", this.panelWidget, 1, "left");
+        } else {
+            // 'Default'
+            Main.panel.addToStatusArea("hamster", this.panelWidget, 0, "right");
+        }
+    }
+
+    _removeWidget(placement) {
+        if (placement == 1) {
+            // We replaced the calendar
+            Main.panel._rightBox.remove_actor(dateMenu.container);
+            Main.panel._addToPanelBox(
+                'dateMenu',
+                dateMenu,
+                Main.sessionMode.panel.center.indexOf('dateMenu'),
+                Main.panel._centerBox
             );
         },
 
@@ -275,10 +343,19 @@ function Controller(extensionMeta) {
             }
         },
     };
+            Main.panel._centerBox.remove_actor(this.panelWidget.container);
+        } else if (placement == 2) {
+            // We replaced the 'Activities' menu
+            let activitiesMenu = Main.panel._leftBox.get_children()[0].get_children()[0].get_children()[0].get_children()[0];
+            activitiesMenu.set_text(this._activitiesText);
+            Main.panel._leftBox.remove_actor(this.panelWidget.container);
+        } else {
+            Main.panel._rightBox.remove_actor(this.panelWidget.container);
+        }
+    }
 }
 
-
 function init(extensionMeta) {
-    Convenience.initTranslations();
+    ExtensionUtils.initTranslations();
     return new Controller(extensionMeta);
 }
